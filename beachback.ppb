@@ -1,0 +1,10 @@
+#!/home/john/src/pp-back/pp-back
+#
+mode=pull
+host=""
+link=yes
+save=15
+delete=no
+prefix=/media/john/BeachBack
+
+data="/home/john"
