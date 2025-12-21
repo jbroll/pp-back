@@ -1,7 +1,7 @@
 .PHONY: test clean
 
 test:
-	@./test.sh
+	@./test-pp-back.sh
 
 clean:
-	rm -rf test test.ppb
+	rm -rf test test.ppb test.ppb.exclude

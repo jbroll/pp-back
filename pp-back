@@ -129,8 +129,8 @@ case $mode in
         ssh "$host" "cat \"$prefix/$excl\"" >> "$tmpfile" 2>/dev/null || true
         ssh "$host" "cat \"$prefix/$name.ppb.$(basename "$source").exclude\"" >> "$tmpfile" 2>/dev/null || true
 
-        echo rsync $dryrun -avz $delete "$linker" "$Excl" "$source" "$host$colon$prefix/$(date +%Y.%m%d)"
-        rsync $dryrun -avz $delete "$linker" "$Excl" "$source" "$host$colon$prefix/$(date +%Y.%m%d)"
+        echo rsync $dryrun -avz $delete $linker "$Excl" "$source" "$host$colon$prefix/$(date +%Y.%m%d)"
+        rsync $dryrun -avz $delete $linker "$Excl" "$source" "$host$colon$prefix/$(date +%Y.%m%d)"
     done
 
     # shellcheck disable=SC2087  # Variables intentionally expanded client-side
@@ -184,8 +184,8 @@ EOF
         cat "$prefix/$excl" >> "$tmpfile" 2>/dev/null || true
         cat "$prefix/$name.ppb.$(basename "$source").exclude" >> "$tmpfile" 2>/dev/null || true
 
-        echo rsync "$dryrun" -avz $delete "$linker" "$Excl" "$host$colon$source" "$prefix/$(date +%Y.%m%d)"
-        rsync "$dryrun" -avz $delete "$linker" "$Excl" "$host$colon$source" "$prefix/$(date +%Y.%m%d)" 2>&1 | grep -E "(speedup is|DRY RUN)" || true
+        echo rsync $dryrun -avz $delete $linker "$Excl" "$host$colon$source" "$prefix/$(date +%Y.%m%d)"
+        rsync $dryrun -avz $delete $linker "$Excl" "$host$colon$source" "$prefix/$(date +%Y.%m%d)" 2>&1 | grep -E "(speedup is|DRY RUN)" || true
     done
 
     # shellcheck disable=SC2086  # $allpattern is a glob, $todelete is multi-dir
