@@ -1,0 +1,13 @@
+#!/home/john/bin/pp-back
+#
+mode=push			# The mode, push data to or pull data from remote                
+host=john@blink		# Name of the remote host
+link=yes			# Link to previous data dir is available.
+save=15				# How many sequential days to save.
+delete=yes			# Delete files in the backup that no longer exist.
+
+prefix=listener		# Where to put the backup
+
+# the data variable is a list of directories to backup for this config.
+#
+data="/Users/john"

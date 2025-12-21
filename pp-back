@@ -1,0 +1,174 @@
+#!/bin/sh
+# shellcheck disable=SC1090,SC2029,SC2012,SC2129
+# SC1090: Dynamic config sourcing is intentional
+# SC2029: Client-side SSH expansion is intentional
+# SC2012: ls needed for sorted directory listing
+# SC2129: Separate cat commands are clearer than grouped redirects
+#
+# Push/Pull Backup
+#
+# This script depends on /bin/sh, ssh, rsync, awk, mkdir, ls, date, echo, rm, and basename.
+#
+# 
+# The script is invoked as:
+#
+# > pp-back /path/to/config/name
+#
+#  It reads in a configuration file with the .ppb extension, the extension is not
+#  included in the config name on the command line.  In the config file the
+#  following items are specified:
+#
+#  ----- example: clark.ppb --------------------------------------
+#
+#    name=clark     		# The name of the back up config.
+#    mode=pull			# The mode, push data to or pull data from remote                
+#    host=root@clark.lco.cl	# Name of the remote host
+#    link=yes			# Link to previous data dir is available.
+#    save=30			# How many sequential days to save.
+#    delete=no			# Delete files in the backup that no longer exist.
+#
+#    prefix=/backup/clark	# Where to put the backup
+#
+#    # the data variable is a list of directories to backup for this config.
+#    #
+#    data="/etc
+#          /home
+#	   /usr/local
+#	   /data/mmti
+#	   /data/IRAF
+#    "
+#  ---------------------------------------------------------------
+#
+# Backup directories are created under the $prefix directory with form: YYYY.MMDD,
+# for example: 2011.1010 is created io October 10, 2010.
+#
+# The last $save directories are kept.  If save=30 and the script is run every day
+# the last 30 days of backup will be kept.  In addition directories of the form
+# ????.??01 are never deleted.  This keeps every backup created on the first of the
+# month.
+#
+# Local backups can be done by specifying host="" and mode=pull.
+#
+# 
+# Files to be excluded from the backup can be indicated with patterns in these files:
+#
+#  $name.ppb.exclude			# The directory where the config file is located
+#  $data/$name.ppb.exclude		# Each source directory has its own excludes at its root.
+#  $prefix/$name.ppb.exclude		# The config has an exclude at the target prefix directory.
+#  $prefix/$name.ppb.$data.exclude	# Each source directory has its won exlucdes in the 
+#					# target prefix directory.
+# 
+#
+# shellcheck disable=SC2154  # Variables from sourced config: host, name, mode, prefix, data, save
+link=yes
+colon=":"
+dryrun=""
+
+set -e
+trap 'rm -f "$tmpfile"' EXIT
+tmpfile=$(mktemp) || exit 1
+
+if [ "$#" -ne 1 ] ; then
+    echo "pp-back <tag>" >&2
+    exit 1
+fi
+
+if [ ! -f "$1.ppb" ] ; then
+    echo "pp-back: no config file" >&2
+    exit 1
+fi
+
+if [ ! -O "$1.ppb" ] ; then
+    echo "pp-back: config must be owned by you" >&2
+    exit 1
+fi
+
+case $1 in
+ /*) ACTION=PRE_BACKUP . "$1.ppb" ;;
+ *)  ACTION=PRE_BACKUP . "./$1.ppb" ;;
+esac
+
+if [ "$host"   = ""    ] ; then  colon="";         fi
+if [ "$delete" = "yes" ] ; then  delete=--delete;  else delete=""; fi
+
+allpattern='20[0-9][0-9].[0-9][0-9][0-9][0-9]'
+daypattern='20[0-9][0-9].[0-1][0-9]0[2-9] 20[0-9][0-9].[0-1][0-9][1-3][0-9]'
+
+excl=$name.ppb.exclude
+Excl="--exclude-from=$tmpfile"
+
+echo "pp-back : $mode : $(date)"
+
+case $mode in
+ push)
+    if ! ssh "$host" mkdir -p "$prefix" ; then
+        echo "cannot mkdir -p $prefix on remote $host" >&2
+        exit 1
+    fi
+
+    if [ "$link" = yes ] ; then
+        linker=$(ssh "$host" "cd \"$prefix\" && ls -dr $allpattern" 2>/dev/null | head -20 | awk '{ print "--link-dest ../" $1 }')
+    fi
+
+    for source in $data ; do
+        : > "$tmpfile"
+
+        cat "$1.ppb.exclude" >> "$tmpfile" 2>/dev/null
+        cat "$source/$excl" >> "$tmpfile" 2>/dev/null
+        ssh "$host" "cat \"$prefix/$excl\"" >> "$tmpfile" 2>/dev/null
+        ssh "$host" "cat \"$prefix/$name.ppb.$(basename "$source").exclude\"" >> "$tmpfile" 2>/dev/null
+
+        echo rsync -avz $delete "$linker" "$Excl" "$source" "$host$colon$prefix/$(date +%Y.%m%d)"
+        rsync -avz $delete "$linker" "$Excl" "$source" "$host$colon$prefix/$(date +%Y.%m%d)"
+    done
+
+    ssh "$host" \
+       "if cd \"$prefix\" ; then
+            delete=\$(ls -dr $daypattern 2>/dev/null | awk \"NR > $save\")
+            if [ \"\$delete\" != \"\" ] ; then
+                chmod -Rf +w -- \$delete 2>/dev/null
+                rm -fr -- \$delete
+            fi
+        fi"
+ ;;
+
+ pull)
+    if ! mkdir -p "$prefix" ; then
+        echo "cannot mkdir -p $prefix" >&2
+        exit 1
+    fi
+
+    if [ "$link" = yes ] ; then
+        # shellcheck disable=SC2086  # $allpattern is a glob
+        linker=$(cd "$prefix" && ls -dr $allpattern 2>/dev/null | head -20 | awk '{ print "--link-dest ../" $1 }')
+    fi
+
+    for source in $data ; do
+        : > "$tmpfile"
+
+        cat "$1.ppb.exclude" >> "$tmpfile" 2>/dev/null
+        ssh "$host" "cat \"$source/$excl\"" >> "$tmpfile" 2>/dev/null
+        cat "$prefix/$excl" >> "$tmpfile" 2>/dev/null
+        cat "$prefix/$name.ppb.$(basename "$source").exclude" >> "$tmpfile" 2>/dev/null
+
+        echo rsync "$dryrun" -avz $delete "$linker" "$Excl" "$host$colon$source" "$prefix/$(date +%Y.%m%d)"
+        rsync "$dryrun" -avz $delete "$linker" "$Excl" "$host$colon$source" "$prefix/$(date +%Y.%m%d)" 2>&1 | grep "speedup is"
+    done
+
+    # shellcheck disable=SC2086  # $daypattern is a glob, $delete is multi-dir
+    if cd "$prefix" ; then
+        delete=$(ls -dr $daypattern 2>/dev/null | awk "NR > $save")
+        if [ "$delete" != "" ] ; then
+            chmod -Rf +w -- $delete 2>/dev/null
+            rm -fr -- $delete
+        fi
+    fi
+ ;;
+esac
+
+case $1 in
+ /*) ACTION=POST_BACKUP . "$1.ppb" ;;
+ *)  ACTION=POST_BACKUP . "./$1.ppb" ;;
+esac
+echo "pp-back : $mode : $(date)"
+
