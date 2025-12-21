@@ -21,10 +21,11 @@
 #  ----- example: clark.ppb --------------------------------------
 #
 #    name=clark     		# The name of the back up config.
-#    mode=pull			# The mode, push data to or pull data from remote                
+#    mode=pull			# The mode, push data to or pull data from remote
 #    host=root@clark.lco.cl	# Name of the remote host
 #    link=yes			# Link to previous data dir is available.
-#    save=30			# How many sequential days to save.
+#    save=14			# Keep last N daily backups (default: 14)
+#    monthly=12			# Keep last N monthly backups (default: 12)
 #    delete=no			# Delete files in the backup that no longer exist.
 #
 #    prefix=/backup/clark	# Where to put the backup
@@ -42,10 +43,10 @@
 # Backup directories are created under the $prefix directory with form: YYYY.MMDD,
 # for example: 2011.1010 is created io October 10, 2010.
 #
-# The last $save directories are kept.  If save=30 and the script is run every day
-# the last 30 days of backup will be kept.  In addition directories of the form
-# ????.??01 are never deleted.  This keeps every backup created on the first of the
-# month.
+# Retention: Backups are kept in three tiers:
+#   - Yearly:  First backup of each year (kept forever)
+#   - Monthly: First backup of each month (keep last $monthly)
+#   - Daily:   All other backups (keep last $save)
 #
 # Local backups can be done by specifying host="" and mode=pull.
 #
@@ -63,13 +64,23 @@
 link=yes
 colon=":"
 dryrun=""
+save=14
+monthly=12
 
 set -e
 trap 'rm -f "$tmpfile"' EXIT
 tmpfile=$(mktemp) || exit 1
 
+while getopts "n" opt; do
+    case $opt in
+        n) dryrun="-n" ;;
+        *) echo "pp-back [-n] <tag>" >&2; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
 if [ "$#" -ne 1 ] ; then
-    echo "pp-back <tag>" >&2
+    echo "pp-back [-n] <tag>" >&2
     exit 1
 fi
 
@@ -84,15 +95,15 @@ if [ ! -O "$1.ppb" ] ; then
 fi
 
 case $1 in
- /*) ACTION=PRE_BACKUP . "$1.ppb" ;;
- *)  ACTION=PRE_BACKUP . "./$1.ppb" ;;
+ /*) config="$1.ppb" ; config_excl="$1.ppb.exclude" ;;
+ *)  config="$(pwd)/$1.ppb" ; config_excl="$(pwd)/$1.ppb.exclude" ;;
 esac
+ACTION=PRE_BACKUP . "$config"
 
 if [ "$host"   = ""    ] ; then  colon="";         fi
 if [ "$delete" = "yes" ] ; then  delete=--delete;  else delete=""; fi
 
 allpattern='20[0-9][0-9].[0-9][0-9][0-9][0-9]'
-daypattern='20[0-9][0-9].[0-1][0-9]0[2-9] 20[0-9][0-9].[0-1][0-9][1-3][0-9]'
 
 excl=$name.ppb.exclude
 Excl="--exclude-from=$tmpfile"
@@ -113,23 +124,41 @@ case $mode in
     for source in $data ; do
         : > "$tmpfile"
 
-        cat "$1.ppb.exclude" >> "$tmpfile" 2>/dev/null
-        cat "$source/$excl" >> "$tmpfile" 2>/dev/null
-        ssh "$host" "cat \"$prefix/$excl\"" >> "$tmpfile" 2>/dev/null
-        ssh "$host" "cat \"$prefix/$name.ppb.$(basename "$source").exclude\"" >> "$tmpfile" 2>/dev/null
+        cat "$config_excl" >> "$tmpfile" 2>/dev/null || true
+        cat "$source/$excl" >> "$tmpfile" 2>/dev/null || true
+        ssh "$host" "cat \"$prefix/$excl\"" >> "$tmpfile" 2>/dev/null || true
+        ssh "$host" "cat \"$prefix/$name.ppb.$(basename "$source").exclude\"" >> "$tmpfile" 2>/dev/null || true
 
-        echo rsync -avz $delete "$linker" "$Excl" "$source" "$host$colon$prefix/$(date +%Y.%m%d)"
-        rsync -avz $delete "$linker" "$Excl" "$source" "$host$colon$prefix/$(date +%Y.%m%d)"
+        echo rsync $dryrun -avz $delete "$linker" "$Excl" "$source" "$host$colon$prefix/$(date +%Y.%m%d)"
+        rsync $dryrun -avz $delete "$linker" "$Excl" "$source" "$host$colon$prefix/$(date +%Y.%m%d)"
     done
 
-    ssh "$host" \
-       "if cd \"$prefix\" ; then
-            delete=\$(ls -dr $daypattern 2>/dev/null | awk \"NR > $save\")
-            if [ \"\$delete\" != \"\" ] ; then
-                chmod -Rf +w -- \$delete 2>/dev/null
-                rm -fr -- \$delete
+    # shellcheck disable=SC2087  # Variables intentionally expanded client-side
+    ssh "$host" /bin/sh <<EOF
+        if cd "$prefix" ; then
+            todelete=\$(ls -d $allpattern 2>/dev/null | awk -v daily="$save" -v monthly="$monthly" '
+            {
+                ym = substr(\$1, 1, 7)
+                if (!(ym in seen)) {
+                    seen[ym] = 1
+                    if (!y[substr(\$1,1,4)]++) next
+                    mo[++mc] = \$1
+                    if (monthly && mc > monthly) print mo[mc - monthly]
+                } else {
+                    da[++dc] = \$1
+                    if (dc > daily) print da[dc - daily]
+                }
+            }')
+            if [ "\$todelete" != "" ] ; then
+                if [ "$dryrun" = "-n" ] ; then
+                    for d in \$todelete; do echo "would delete: \$d"; done
+                else
+                    chmod -Rf +w -- \$todelete 2>/dev/null
+                    rm -fr -- \$todelete
+                fi
             fi
-        fi"
+        fi
+EOF
  ;;
 
  pull)
@@ -146,29 +175,46 @@ case $mode in
     for source in $data ; do
         : > "$tmpfile"
 
-        cat "$1.ppb.exclude" >> "$tmpfile" 2>/dev/null
-        ssh "$host" "cat \"$source/$excl\"" >> "$tmpfile" 2>/dev/null
-        cat "$prefix/$excl" >> "$tmpfile" 2>/dev/null
-        cat "$prefix/$name.ppb.$(basename "$source").exclude" >> "$tmpfile" 2>/dev/null
+        cat "$config_excl" >> "$tmpfile" 2>/dev/null || true
+        if [ -n "$host" ] ; then
+            ssh "$host" "cat \"$source/$excl\"" >> "$tmpfile" 2>/dev/null || true
+        else
+            cat "$source/$excl" >> "$tmpfile" 2>/dev/null || true
+        fi
+        cat "$prefix/$excl" >> "$tmpfile" 2>/dev/null || true
+        cat "$prefix/$name.ppb.$(basename "$source").exclude" >> "$tmpfile" 2>/dev/null || true
 
         echo rsync "$dryrun" -avz $delete "$linker" "$Excl" "$host$colon$source" "$prefix/$(date +%Y.%m%d)"
-        rsync "$dryrun" -avz $delete "$linker" "$Excl" "$host$colon$source" "$prefix/$(date +%Y.%m%d)" 2>&1 | grep "speedup is"
+        rsync "$dryrun" -avz $delete "$linker" "$Excl" "$host$colon$source" "$prefix/$(date +%Y.%m%d)" 2>&1 | grep -E "(speedup is|DRY RUN)" || true
     done
 
-    # shellcheck disable=SC2086  # $daypattern is a glob, $delete is multi-dir
+    # shellcheck disable=SC2086  # $allpattern is a glob, $todelete is multi-dir
     if cd "$prefix" ; then
-        delete=$(ls -dr $daypattern 2>/dev/null | awk "NR > $save")
-        if [ "$delete" != "" ] ; then
-            chmod -Rf +w -- $delete 2>/dev/null
-            rm -fr -- $delete
+        todelete=$(ls -d $allpattern 2>/dev/null | awk -v daily="$save" -v monthly="$monthly" '
+        {
+            ym = substr($1, 1, 7)
+            if (!(ym in seen)) {
+                seen[ym] = 1
+                if (!y[substr($1,1,4)]++) next
+                mo[++mc] = $1
+                if (monthly && mc > monthly) print mo[mc - monthly]
+            } else {
+                da[++dc] = $1
+                if (dc > daily) print da[dc - daily]
+            }
+        }')
+        if [ "$todelete" != "" ] ; then
+            if [ "$dryrun" = "-n" ] ; then
+                for d in $todelete; do echo "would delete: $d"; done
+            else
+                chmod -Rf +w -- $todelete 2>/dev/null
+                rm -fr -- $todelete
+            fi
         fi
     fi
  ;;
 esac
 
-case $1 in
- /*) ACTION=POST_BACKUP . "$1.ppb" ;;
- *)  ACTION=POST_BACKUP . "./$1.ppb" ;;
-esac
+ACTION=POST_BACKUP . "$config"
 echo "pp-back : $mode : $(date)"
 
