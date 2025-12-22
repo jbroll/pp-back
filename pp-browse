@@ -6,13 +6,14 @@
 #
 # pp-browse - CGI script to browse and retrieve pp-back backups
 #
-# This script depends on /bin/sh, ssh, ls, cat, awk, basename, and dirname.
+# This script depends on /bin/sh, ssh, ls, cat, awk, basename, dirname, tar, and gzip.
 #
 # URL Path Format:
 #   /pp-browse                              - List available configs
 #   /pp-browse/<config>                     - List backup dates
 #   /pp-browse/<config>/<date>              - List backed-up directories
 #   /pp-browse/<config>/<date>/<path>       - Browse or download
+#   /pp-browse/<config>/<date>/<path>?tar   - Download directory as tar.gz
 #
 # Configuration:
 #   Set CONFIG_DIR to the directory containing .ppb config files
@@ -273,16 +274,18 @@ do_list_dir() {
     echo "<h1>$config / $date</h1>"
     echo "<div class=\"path\">$display_path</div>"
 
-    # Back link
+    # Back link and download
     if [ -n "$subpath" ]; then
         parent=$(dirname "$subpath")
         if [ "$parent" = "." ]; then
-            echo "<p class=\"back\"><a href=\"$SCRIPT_NAME/$config/$date\">← Up one level</a></p>"
+            echo "<p class=\"back\"><a href=\"$SCRIPT_NAME/$config/$date\">← Up one level</a>"
         else
-            echo "<p class=\"back\"><a href=\"$SCRIPT_NAME/$config/$date/$parent\">← Up one level</a></p>"
+            echo "<p class=\"back\"><a href=\"$SCRIPT_NAME/$config/$date/$parent\">← Up one level</a>"
         fi
+        echo " | <a href=\"$SCRIPT_NAME/$config/$date/$subpath?tar\">Download as tar.gz</a></p>"
     else
-        echo "<p class=\"back\"><a href=\"$SCRIPT_NAME/$config\">← Back to dates</a></p>"
+        echo "<p class=\"back\"><a href=\"$SCRIPT_NAME/$config\">← Back to dates</a>"
+        echo " | <a href=\"$SCRIPT_NAME/$config/$date?tar\">Download as tar.gz</a></p>"
     fi
 
     echo "<ul>"
@@ -373,6 +376,35 @@ do_serve_file() {
 }
 
 #
+# Serve a directory as tar.gz
+#
+do_serve_tar() {
+    config="$1"
+    date="$2"
+    subpath="$3"
+
+    load_config "$config"
+
+    if [ -n "$subpath" ]; then
+        full_path="$prefix/$date/$subpath"
+        tarname=$(basename "$subpath")
+    else
+        full_path="$prefix/$date"
+        tarname="$config-$date"
+    fi
+
+    echo "Content-Type: application/gzip"
+    echo "Content-Disposition: attachment; filename=\"$tarname.tar.gz\""
+    echo ""
+
+    if [ "$mode" = "push" ] && [ -n "$host" ]; then
+        ssh "$host" "tar -czf - -C \"$(dirname "$full_path")\" \"$(basename "$full_path")\""
+    else
+        tar -czf - -C "$(dirname "$full_path")" "$(basename "$full_path")"
+    fi
+}
+
+#
 # Check if path is a directory
 #
 is_directory() {
@@ -420,8 +452,10 @@ do_not_found() {
 
 # Remove leading slash and parse path components
 # PATH_INFO is set by CGI server (e.g., /config/date/path)
+# QUERY_STRING is set by CGI server (e.g., tar)
 # shellcheck disable=SC2153
 path_info="${PATH_INFO#/}"
+query="${QUERY_STRING:-}"
 
 # Validate inputs
 validate_path "$path_info"
@@ -455,7 +489,13 @@ else
     pathtype=$(is_directory "$config" "$date" "$subpath")
 
     case "$pathtype" in
-        d)  do_list_dir "$config" "$date" "$subpath" ;;
+        d)
+            if [ "$query" = "tar" ]; then
+                do_serve_tar "$config" "$date" "$subpath"
+            else
+                do_list_dir "$config" "$date" "$subpath"
+            fi
+            ;;
         f)  do_serve_file "$config" "$date" "$subpath" ;;
         *)  do_not_found "$path_info" ;;
     esac

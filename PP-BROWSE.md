@@ -6,13 +6,14 @@ CGI script for browsing and retrieving files from pp-back backups.
 
 - Browse backup configurations, dates, and directory trees
 - Download files directly from backups
+- Download directories as tar.gz archives
 - Works with both push (remote) and pull (local) backup modes
 - Uses SSH for remote access (same as pp-back)
 - Mime type detection for common file extensions
 
 ## Dependencies
 
-Same minimal dependencies as pp-back: `/bin/sh`, `ssh`, `ls`, `cat`, `awk`, `cut`, `basename`, `dirname`
+Same minimal dependencies as pp-back: `/bin/sh`, `ssh`, `ls`, `cat`, `awk`, `cut`, `basename`, `dirname`, `tar`, `gzip`
 
 ## URL Path Format
 
@@ -21,6 +22,7 @@ Same minimal dependencies as pp-back: `/bin/sh`, `ssh`, `ls`, `cat`, `awk`, `cut
 /pp-browse/<config>                     # list backup dates
 /pp-browse/<config>/<date>              # list backed-up directories
 /pp-browse/<config>/<date>/<path>       # browse directory or download file
+/pp-browse/<config>/<date>/<path>?tar   # download directory as tar.gz
 ```
 
 Examples:
@@ -29,6 +31,7 @@ Examples:
 /cgi-bin/pp-browse/blink                # show 2025.1221, 2025.1220, etc.
 /cgi-bin/pp-browse/blink/2025.1221      # show /home, /etc, etc.
 /cgi-bin/pp-browse/blink/2025.1221/home/user/doc.pdf   # download file
+/cgi-bin/pp-browse/blink/2025.1221/home?tar            # download /home as tar.gz
 ```
 
 ## Configuration
