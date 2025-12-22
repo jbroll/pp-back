@@ -46,3 +46,20 @@ Backups are stored as `YYYY.MMDD` directories under the prefix path. The `--link
 ## Dependencies
 
 The script requires: `/bin/sh`, `ssh`, `rsync`, `awk`, `mkdir`, `ls`, `date`, `echo`, `rm`, `basename`
+
+## Browsing Backups (pp-browse)
+
+A CGI script for browsing and retrieving backed-up files. See [PP-BROWSE.md](PP-BROWSE.md) for full documentation.
+
+```sh
+./pp-browse 8080              # Run standalone server on port 8080
+# Browse to http://localhost:8080/cgi-bin/pp-browse
+```
+
+URL path format: `/<config>/<date>/<path>` (e.g., `/blink/2025.0101/home/user/file.txt`)
+
+Features:
+- Browse backup configs, dates, and directory trees
+- Download individual files with proper mime types
+- Download directories as tar.gz (`?tar` query parameter)
+- Works with both push and pull mode configs via SSH
