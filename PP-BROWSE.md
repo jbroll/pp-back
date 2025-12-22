@@ -13,7 +13,9 @@ CGI script for browsing and retrieving files from pp-back backups.
 
 ## Dependencies
 
-Same minimal dependencies as pp-back: `/bin/sh`, `ssh`, `ls`, `cat`, `awk`, `cut`, `basename`, `dirname`, `tar`, `gzip`
+CGI mode: `/bin/sh`, `ssh`, `ls`, `cat`, `awk`, `cut`, `basename`, `dirname`, `tar`, `gzip`
+
+Server mode: `python3` (in addition to above)
 
 ## URL Path Format
 
@@ -47,7 +49,21 @@ The script reads `.ppb` config files to determine:
 - `host` - remote host for SSH (empty for local)
 - `prefix` - backup directory location
 
-## Deployment
+## Standalone Server
+
+Run pp-browse as a standalone HTTP server (requires Python 3):
+
+```sh
+./pp-browse 8080
+# Browse to http://localhost:8080/cgi-bin/pp-browse
+```
+
+With custom config directory:
+```sh
+CONFIG_DIR=/path/to/configs ./pp-browse 8080
+```
+
+## Deployment with External Web Server
 
 ### Apache
 

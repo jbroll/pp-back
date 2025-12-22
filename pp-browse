@@ -7,20 +7,48 @@
 # pp-browse - CGI script to browse and retrieve pp-back backups
 #
 # This script depends on /bin/sh, ssh, ls, cat, awk, basename, dirname, tar, and gzip.
+# Server mode additionally requires: python3
+#
+# Usage:
+#   ./pp-browse              - Run as CGI (requires CGI environment)
+#   ./pp-browse <port>       - Run as standalone HTTP server on <port>
 #
 # URL Path Format:
-#   /pp-browse                              - List available configs
-#   /pp-browse/<config>                     - List backup dates
-#   /pp-browse/<config>/<date>              - List backed-up directories
-#   /pp-browse/<config>/<date>/<path>       - Browse or download
-#   /pp-browse/<config>/<date>/<path>?tar   - Download directory as tar.gz
+#   /                                       - List available configs
+#   /<config>                               - List backup dates
+#   /<config>/<date>                        - List backed-up directories
+#   /<config>/<date>/<path>                 - Browse or download
+#   /<config>/<date>/<path>?tar             - Download directory as tar.gz
 #
 # Configuration:
 #   Set CONFIG_DIR to the directory containing .ppb config files
-#   or set it via environment variable before CGI execution.
+#   or set it via environment variable before execution.
 #
 
 CONFIG_DIR="${CONFIG_DIR:-/home/john/src/pp-back}"
+
+#
+# Server mode: run as standalone HTTP server using Python
+#
+case "$1" in
+    [0-9]|[0-9][0-9]|[0-9][0-9][0-9]|[0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9][0-9])
+        port="$1"
+
+        echo "pp-browse: serving on http://localhost:$port" >&2
+        echo "pp-browse: CONFIG_DIR=$CONFIG_DIR" >&2
+
+        # Create CGI directory structure and symlink
+        tmpdir=$(mktemp -d)
+        trap 'rm -rf "$tmpdir"' EXIT
+        mkdir -p "$tmpdir/cgi-bin"
+        ln -s "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" "$tmpdir/cgi-bin/pp-browse"
+
+        # Run Python CGI server
+        cd "$tmpdir" || exit 1
+        CONFIG_DIR="$CONFIG_DIR" python3 -m http.server --cgi "$port"
+        exit 0
+        ;;
+esac
 
 # Date pattern for backup directories
 DATE_PATTERN='20[0-9][0-9].[0-9][0-9][0-9][0-9]'
