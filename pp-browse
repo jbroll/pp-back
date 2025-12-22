@@ -1,0 +1,462 @@
+#!/bin/sh
+# shellcheck disable=SC1090,SC2029,SC2012,SC2011
+# SC1090: Dynamic config sourcing is intentional
+# SC2029: Client-side SSH expansion is intentional
+# SC2012/SC2011: ls needed for sorted directory listing (same as pp-back)
+#
+# pp-browse - CGI script to browse and retrieve pp-back backups
+#
+# This script depends on /bin/sh, ssh, ls, cat, awk, basename, and dirname.
+#
+# URL Path Format:
+#   /pp-browse                              - List available configs
+#   /pp-browse/<config>                     - List backup dates
+#   /pp-browse/<config>/<date>              - List backed-up directories
+#   /pp-browse/<config>/<date>/<path>       - Browse or download
+#
+# Configuration:
+#   Set CONFIG_DIR to the directory containing .ppb config files
+#   or set it via environment variable before CGI execution.
+#
+
+CONFIG_DIR="${CONFIG_DIR:-/home/john/src/pp-back}"
+
+# Date pattern for backup directories
+DATE_PATTERN='20[0-9][0-9].[0-9][0-9][0-9][0-9]'
+
+#
+# Security: Validate path has no dangerous components
+#
+validate_path() {
+    case "$1" in
+        *..*)
+            echo "Status: 400 Bad Request"
+            echo "Content-Type: text/plain"
+            echo ""
+            echo "Invalid path: contains .."
+            exit 1
+            ;;
+    esac
+}
+
+#
+# Security: Validate date format
+#
+validate_date() {
+    case "$1" in
+        20[0-9][0-9].[0-9][0-9][0-9][0-9]) return 0 ;;
+        *)
+            echo "Status: 400 Bad Request"
+            echo "Content-Type: text/plain"
+            echo ""
+            echo "Invalid date format: $1"
+            exit 1
+            ;;
+    esac
+}
+
+#
+# Security: Validate config name (alphanumeric, dash, underscore only)
+#
+validate_config() {
+    case "$1" in
+        *[!a-zA-Z0-9_-]*)
+            echo "Status: 400 Bad Request"
+            echo "Content-Type: text/plain"
+            echo ""
+            echo "Invalid config name: $1"
+            exit 1
+            ;;
+    esac
+}
+
+#
+# Determine mime type from file extension
+#
+mime_type() {
+    case "$1" in
+        *.html|*.htm) echo "text/html" ;;
+        *.css)        echo "text/css" ;;
+        *.js)         echo "application/javascript" ;;
+        *.json)       echo "application/json" ;;
+        *.pdf)        echo "application/pdf" ;;
+        *.png)        echo "image/png" ;;
+        *.jpg|*.jpeg) echo "image/jpeg" ;;
+        *.gif)        echo "image/gif" ;;
+        *.svg)        echo "image/svg+xml" ;;
+        *.ico)        echo "image/x-icon" ;;
+        *.txt)        echo "text/plain" ;;
+        *.log)        echo "text/plain" ;;
+        *.md)         echo "text/plain" ;;
+        *.sh)         echo "text/plain" ;;
+        *.xml)        echo "application/xml" ;;
+        *.zip)        echo "application/zip" ;;
+        *.tar)        echo "application/x-tar" ;;
+        *.gz|*.tgz)   echo "application/gzip" ;;
+        *.bz2)        echo "application/x-bzip2" ;;
+        *.xz)         echo "application/x-xz" ;;
+        *.mp3)        echo "audio/mpeg" ;;
+        *.mp4)        echo "video/mp4" ;;
+        *.wav)        echo "audio/wav" ;;
+        *.webm)       echo "video/webm" ;;
+        *.webp)       echo "image/webp" ;;
+        *)            echo "application/octet-stream" ;;
+    esac
+}
+
+#
+# Output HTML header
+#
+html_start() {
+    echo "Content-Type: text/html"
+    echo ""
+    cat <<'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pp-browse</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2em auto; padding: 0 1em; }
+h1 { color: #333; }
+.path { background: #f5f5f5; padding: 0.5em 1em; border-radius: 4px; margin: 1em 0; font-family: monospace; }
+ul { list-style: none; padding: 0; }
+li { padding: 0.3em 0; }
+a { color: #0066cc; text-decoration: none; }
+a:hover { text-decoration: underline; }
+.dir { font-weight: bold; }
+.dir::before { content: "📁 "; }
+.file::before { content: "📄 "; }
+.size { color: #666; font-size: 0.9em; margin-left: 1em; }
+.back { margin-bottom: 1em; }
+</style>
+</head>
+<body>
+EOF
+}
+
+#
+# Output HTML footer
+#
+html_end() {
+    cat <<'EOF'
+</body>
+</html>
+EOF
+}
+
+#
+# URL encode a string (minimal: spaces and special chars)
+#
+urlencode() {
+    echo "$1" | awk '
+    BEGIN { for (i = 0; i < 256; i++) ord[sprintf("%c", i)] = i }
+    {
+        n = split($0, chars, "")
+        for (i = 1; i <= n; i++) {
+            c = chars[i]
+            if (c ~ /[a-zA-Z0-9._~\/-]/) {
+                printf "%s", c
+            } else {
+                printf "%%%02X", ord[c]
+            }
+        }
+    }'
+}
+
+#
+# HTML escape a string
+#
+html_escape() {
+    echo "$1" | awk '{
+        gsub(/&/, "\\&amp;")
+        gsub(/</, "\\&lt;")
+        gsub(/>/, "\\&gt;")
+        gsub(/"/, "\\&quot;")
+        print
+    }'
+}
+
+#
+# Load a config file and set variables
+#
+load_config() {
+    config_file="$CONFIG_DIR/$1.ppb"
+
+    if [ ! -f "$config_file" ]; then
+        echo "Status: 404 Not Found"
+        echo "Content-Type: text/plain"
+        echo ""
+        echo "Config not found: $1"
+        exit 1
+    fi
+
+    # Source config to get host, prefix, mode
+    host=""
+    prefix=""
+    mode=""
+    . "$config_file"
+}
+
+#
+# List available config files
+#
+do_list_configs() {
+    html_start
+    echo "<h1>pp-browse</h1>"
+    echo "<p>Select a backup configuration:</p>"
+    echo "<ul>"
+
+    for f in "$CONFIG_DIR"/*.ppb; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f" .ppb)
+        escaped_name=$(html_escape "$name")
+        echo "<li class=\"dir\"><a href=\"$SCRIPT_NAME/$escaped_name\">$escaped_name</a></li>"
+    done
+
+    echo "</ul>"
+    html_end
+}
+
+#
+# List backup dates for a config
+#
+do_list_dates() {
+    config="$1"
+    load_config "$config"
+
+    html_start
+    echo "<h1>$config</h1>"
+    echo "<p class=\"back\"><a href=\"$SCRIPT_NAME\">← Back to configs</a></p>"
+    echo "<p>Select a backup date:</p>"
+    echo "<ul>"
+
+    if [ "$mode" = "push" ] && [ -n "$host" ]; then
+        # Remote: SSH to list dates
+        # shellcheck disable=SC2086
+        dates=$(ssh "$host" "ls -dr $prefix/$DATE_PATTERN 2>/dev/null" | xargs -n1 basename 2>/dev/null || true)
+    else
+        # Local: list dates directly
+        # shellcheck disable=SC2086
+        dates=$(ls -dr $prefix/$DATE_PATTERN 2>/dev/null | xargs -n1 basename 2>/dev/null || true)
+    fi
+
+    for d in $dates; do
+        escaped_d=$(html_escape "$d")
+        echo "<li class=\"dir\"><a href=\"$SCRIPT_NAME/$config/$escaped_d\">$escaped_d</a></li>"
+    done
+
+    echo "</ul>"
+    html_end
+}
+
+#
+# List directory contents
+#
+do_list_dir() {
+    config="$1"
+    date="$2"
+    subpath="$3"
+
+    load_config "$config"
+
+    if [ -n "$subpath" ]; then
+        full_path="$prefix/$date/$subpath"
+        display_path="/$subpath"
+    else
+        full_path="$prefix/$date"
+        display_path="/"
+    fi
+
+    html_start
+    echo "<h1>$config / $date</h1>"
+    echo "<div class=\"path\">$display_path</div>"
+
+    # Back link
+    if [ -n "$subpath" ]; then
+        parent=$(dirname "$subpath")
+        if [ "$parent" = "." ]; then
+            echo "<p class=\"back\"><a href=\"$SCRIPT_NAME/$config/$date\">← Up one level</a></p>"
+        else
+            echo "<p class=\"back\"><a href=\"$SCRIPT_NAME/$config/$date/$parent\">← Up one level</a></p>"
+        fi
+    else
+        echo "<p class=\"back\"><a href=\"$SCRIPT_NAME/$config\">← Back to dates</a></p>"
+    fi
+
+    echo "<ul>"
+
+    if [ "$mode" = "push" ] && [ -n "$host" ]; then
+        # Remote listing with type indicator
+        ssh "$host" "ls -laF \"$full_path\" 2>/dev/null" | awk -v script="$SCRIPT_NAME" -v config="$config" -v date="$date" -v subpath="$subpath" '
+        NR > 1 && $NF !~ /^\.\.?\/?$/ {
+            name = $NF
+            size = $5
+
+            # Remove trailing / or @ or * from name for linking
+            linkname = name
+            gsub(/[\/@*]$/, "", linkname)
+
+            if (subpath != "") {
+                href = script "/" config "/" date "/" subpath "/" linkname
+            } else {
+                href = script "/" config "/" date "/" linkname
+            }
+
+            # Escape HTML
+            gsub(/&/, "\\&amp;", name)
+            gsub(/</, "\\&lt;", name)
+            gsub(/>/, "\\&gt;", name)
+
+            if (name ~ /\/$/) {
+                print "<li class=\"dir\"><a href=\"" href "\">" name "</a></li>"
+            } else {
+                print "<li class=\"file\"><a href=\"" href "\">" name "</a><span class=\"size\">" size " bytes</span></li>"
+            }
+        }'
+    else
+        # Local listing
+        ls -laF "$full_path" 2>/dev/null | awk -v script="$SCRIPT_NAME" -v config="$config" -v date="$date" -v subpath="$subpath" '
+        NR > 1 && $NF !~ /^\.\.?\/?$/ {
+            name = $NF
+            size = $5
+
+            linkname = name
+            gsub(/[\/@*]$/, "", linkname)
+
+            if (subpath != "") {
+                href = script "/" config "/" date "/" subpath "/" linkname
+            } else {
+                href = script "/" config "/" date "/" linkname
+            }
+
+            gsub(/&/, "\\&amp;", name)
+            gsub(/</, "\\&lt;", name)
+            gsub(/>/, "\\&gt;", name)
+
+            if (name ~ /\/$/) {
+                print "<li class=\"dir\"><a href=\"" href "\">" name "</a></li>"
+            } else {
+                print "<li class=\"file\"><a href=\"" href "\">" name "</a><span class=\"size\">" size " bytes</span></li>"
+            }
+        }'
+    fi
+
+    echo "</ul>"
+    html_end
+}
+
+#
+# Serve a file
+#
+do_serve_file() {
+    config="$1"
+    date="$2"
+    subpath="$3"
+
+    load_config "$config"
+    full_path="$prefix/$date/$subpath"
+    filename=$(basename "$subpath")
+
+    mime=$(mime_type "$filename")
+
+    echo "Content-Type: $mime"
+    echo "Content-Disposition: inline; filename=\"$filename\""
+    echo ""
+
+    if [ "$mode" = "push" ] && [ -n "$host" ]; then
+        ssh "$host" "cat \"$full_path\""
+    else
+        cat "$full_path"
+    fi
+}
+
+#
+# Check if path is a directory
+#
+is_directory() {
+    config="$1"
+    date="$2"
+    subpath="$3"
+
+    load_config "$config"
+
+    if [ -n "$subpath" ]; then
+        full_path="$prefix/$date/$subpath"
+    else
+        full_path="$prefix/$date"
+    fi
+
+    if [ "$mode" = "push" ] && [ -n "$host" ]; then
+        result=$(ssh "$host" "test -d \"$full_path\" && echo d || test -f \"$full_path\" && echo f" 2>/dev/null)
+    else
+        if [ -d "$full_path" ]; then
+            result="d"
+        elif [ -f "$full_path" ]; then
+            result="f"
+        else
+            result=""
+        fi
+    fi
+
+    echo "$result"
+}
+
+#
+# Error: not found
+#
+do_not_found() {
+    echo "Status: 404 Not Found"
+    echo "Content-Type: text/plain"
+    echo ""
+    echo "Not found: $1"
+    exit 1
+}
+
+#
+# Main: Parse PATH_INFO and dispatch
+#
+
+# Remove leading slash and parse path components
+# PATH_INFO is set by CGI server (e.g., /config/date/path)
+# shellcheck disable=SC2153
+path_info="${PATH_INFO#/}"
+
+# Validate inputs
+validate_path "$path_info"
+
+# Count path depth and extract components
+# depth 0: empty (list configs)
+# depth 1: config only (list dates)
+# depth 2+: config/date[/subpath] (browse or serve)
+depth=$(echo "$path_info" | awk -F/ '{print NF}')
+[ -z "$path_info" ] && depth=0
+
+config=$(echo "$path_info" | cut -d/ -f1)
+date=$(echo "$path_info" | cut -d/ -f2)
+subpath=$(echo "$path_info" | cut -d/ -f3-)
+
+if [ "$depth" -eq 0 ]; then
+    # No config specified: list configs
+    do_list_configs
+
+elif [ "$depth" -eq 1 ]; then
+    # Config only: list dates
+    validate_config "$config"
+    do_list_dates "$config"
+
+else
+    # Config and date: browse or serve
+    validate_config "$config"
+    validate_date "$date"
+
+    # Check what type of path this is
+    pathtype=$(is_directory "$config" "$date" "$subpath")
+
+    case "$pathtype" in
+        d)  do_list_dir "$config" "$date" "$subpath" ;;
+        f)  do_serve_file "$config" "$date" "$subpath" ;;
+        *)  do_not_found "$path_info" ;;
+    esac
+fi

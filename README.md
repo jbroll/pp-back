@@ -9,6 +9,7 @@ POSIX shell backup script using rsync with hard-link deduplication and GFS reten
 - Three-tier retention: daily, monthly, yearly
 - Dry-run mode (`-n`) to preview deletions
 - Pre/post backup hooks
+- [Web-based backup browser](PP-BROWSE.md) for file retrieval
 
 ## Usage
 
@@ -77,6 +78,10 @@ Place rsync exclude patterns in:
 - `config.ppb.exclude` - alongside config file
 - `$source/config.ppb.exclude` - in source directory root
 - `$prefix/config.ppb.exclude` - in backup destination
+
+## Browsing Backups
+
+Use `pp-browse` to browse and retrieve files from backups via a web interface. See [PP-BROWSE.md](PP-BROWSE.md) for details.
 
 ## License
 
