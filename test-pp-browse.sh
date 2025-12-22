@@ -14,7 +14,7 @@ fi
 
 # Setup test environment
 setup() {
-    rm -rf test-browse test-browse.ppb
+    rm -rf test-browse test-browse.ppb test-browse-push.ppb
     mkdir -p test-browse/backup/2024.0115/home/user
     mkdir -p test-browse/backup/2024.0220/home/user
     mkdir -p test-browse/backup/2025.0101/home/user/docs
@@ -288,6 +288,69 @@ EOF
     CompareArgs "$result" "1"
 else
     echo "SKIP: push mode tests (ssh localhost not available)" >&2
+fi
+
+#
+# Test: Server mode (requires python3 and curl)
+#
+python3_available=0
+curl_available=0
+if command -v python3 >/dev/null 2>&1; then
+    python3_available=1
+fi
+if command -v curl >/dev/null 2>&1; then
+    curl_available=1
+fi
+
+if [ "$python3_available" = 1 ] && [ "$curl_available" = 1 ]; then
+    # Use a random-ish port to avoid conflicts
+    server_port=$((8900 + $$ % 100))
+
+    # Helper to start server with correct CONFIG_DIR
+    start_server() {
+        CONFIG_DIR="$(pwd)" ./pp-browse "$server_port" >/dev/null 2>&1 &
+        server_pid=$!
+        sleep 2
+    }
+
+    stop_server() {
+        kill $server_pid 2>/dev/null
+        wait $server_pid 2>/dev/null
+    }
+
+    Test "server: starts and lists configs"
+
+    setup
+    start_server
+    result=$(curl -s --max-time 3 "http://localhost:$server_port/cgi-bin/pp-browse" | grep -c "test-browse")
+    stop_server
+    CompareArgs "$result" "1"
+
+    Test "server: lists backup dates"
+
+    setup
+    start_server
+    result=$(curl -s --max-time 3 "http://localhost:$server_port/cgi-bin/pp-browse/test-browse" | grep -c "2025.0101")
+    stop_server
+    CompareArgs "$result" "1"
+
+    Test "server: serves file content"
+
+    setup
+    start_server
+    result=$(curl -s --max-time 3 "http://localhost:$server_port/cgi-bin/pp-browse/test-browse/2025.0101/home/user/file.txt")
+    stop_server
+    CompareArgs "$result" "file content"
+
+    Test "server: tar download works"
+
+    setup
+    start_server
+    result=$(curl -s --max-time 3 "http://localhost:$server_port/cgi-bin/pp-browse/test-browse/2025.0101/home/user?tar" | tar -tzf - 2>/dev/null | grep -c "file.txt")
+    stop_server
+    CompareArgs "$result" "1"
+else
+    echo "SKIP: server mode tests (python3 or curl not available)" >&2
 fi
 
 cleanup
