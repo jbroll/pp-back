@@ -421,7 +421,7 @@ is_directory() {
     fi
 
     if [ "$mode" = "push" ] && [ -n "$host" ]; then
-        result=$(ssh "$host" "test -d \"$full_path\" && echo d || test -f \"$full_path\" && echo f" 2>/dev/null)
+        result=$(ssh "$host" "if [ -d \"$full_path\" ]; then echo d; elif [ -f \"$full_path\" ]; then echo f; fi" 2>/dev/null)
     else
         if [ -d "$full_path" ]; then
             result="d"
