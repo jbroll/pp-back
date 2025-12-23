@@ -1,0 +1,130 @@
+# beachback.ppb.exclude - Excludes for home backup to USB
+# Target: Reduce ~302G to ~100G for 107G USB drive
+#
+# Generated: 2024-12-22
+# See ~/system-docs/BACKUP-PLAN.md for full analysis
+
+# ============================================
+# PHASE 1: Cloud-Synced & Rebuilable (~172G)
+# ============================================
+
+# Cloud-synced (63G)
+OneDrive/
+
+# Caches - all rebuilable (45G)
+.cache/
+
+# Development tool caches - reinstallable
+.arduino15/
+.platformio/
+.npm/
+.gradle/
+.cipd-cache-dir/
+.rustup/
+.nvm/
+.bun/
+.cargo/registry/
+.cargo/git/
+
+# Snap packages - reinstallable (9.7G)
+snap/
+
+# Android SDK - reinstallable (12G)
+Android/
+.android/
+
+# ============================================
+# PHASE 2: Clean Git Repos (can re-clone)
+# ============================================
+
+# ~/src/ clean repos
+src/ClaudeSync/
+
+# ~/pkg/ clean repos
+pkg/AntennaPod/
+pkg/instant-meshes/
+pkg/jazz/
+pkg/lark/
+pkg/LEGO.scad/
+pkg/pico-extras/
+pkg/pico-microphone/
+pkg/SparkFun_RTK_Everywhere_Firmware/
+pkg/spkrd/
+pkg/tkpaint1.6/
+
+# ============================================
+# COMMON BUILD ARTIFACTS & TEMP FILES
+# ============================================
+
+# Node.js
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.eggs/
+*.egg-info/
+
+# Build outputs
+build/
+dist/
+target/
+*.o
+*.a
+*.so
+*.dylib
+
+# IDE & editor
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.Trash-*/
+.DS_Store
+Thumbs.db
+
+# Large temp files
+*.log
+*.tmp
+core
+core.*
+
+# ============================================
+# PHASE 3: Downloadable/Generated Data in Repos
+# ============================================
+
+# geocoder - 30G of downloadable OSM parquet data
+src/geocoder/data/
+src/geocoder/db/
+src/geocoder/db_test/
+
+# bubblelist - 3.7G generated grocery dictionary
+src/bubblelist/scripts/grocery-dictionary/
+
+# Old Downloads in backups - 6.7G+ of old downloads
+listener/2024.0704/john/Downloads/
+listener/2024.0704/john/byte/2019.1224/john/Downloads/
+
+# Rebuilable content in old backups
+listener/2024.0704/john/.platformio/
+listener/2024.0704/john/pkg/
+listener/2024.0704/john/byte/2019.1224/john/.cache/
+listener/2024.0704/john/byte/2019.1224/john/.local/
+listener/2024.0704/john/byte/2019.1224/john/Samsung/
+listener/2024.0704/john/byte/2019.1224/john/arduino-nightly/
+
+# ============================================
+# ADDITIONAL SPACE SAVERS
+# ============================================
+
+# Git objects (repos can be re-cloned)
+# Uncomment if you need more space:
+# **/.git/objects/
+
+# Downloads - usually re-downloadable
+# Downloads/
