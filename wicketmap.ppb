@@ -1,0 +1,28 @@
+#!/home/john/src/pp-back/pp-back
+#
+# WicketMap production backup, staged on gpu and pushed to the NAS.
+# Driven by wicketmap's scripts/backup-nightly.sh, which stages the nightly
+# snapshot and then runs this config. Do not run it on its own: the snapshot
+# directory is rebuilt per run, so a bare run would copy whatever is left from
+# the last one.
+
+name=wicketmap
+mode=pull			# local copy: source and prefix are both on gpu's view
+host=""
+link=yes
+save=14				# two weeks of nightlies
+monthly=12			# a year of month-firsts
+delete=no
+prefix=/mnt/nas/wicketmap-backups
+
+# One snapshot directory, rebuilt each night: an unpacked <mapId>/ tree per
+# campaign map (map.json, metadata.json, media/), plus index.json and auth.db.
+# Unpacked, not zipped, so link=yes actually dedups — a zip changes wholesale
+# when one feature does. Trailing slash so the contents land directly in
+# $prefix/YYYY.MMDD rather than under a second directory level.
+data="/home/john/wicketmap-backup/staging/snapshot/"
+
+# An encryption pass belongs here — at PRE_BACKUP the snapshot is complete and
+# nothing has been copied yet:
+#
+# if [ "$ACTION" = PRE_BACKUP ] ; then ... ; fi
