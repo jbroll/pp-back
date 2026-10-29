@@ -72,6 +72,21 @@ Backups are stored as `YYYY.MMDD` directories. Retention tiers:
 - **Monthly**: first backup of each month (keep last `monthly`)
 - **Daily**: all others (keep last `save`)
 
+## Hooks
+
+Config files can include pre/post backup hooks by checking `$ACTION`:
+
+```sh
+case $ACTION in
+    PRE_BACKUP)  echo "starting backup" ;;
+    POST_BACKUP) echo "backup finished" ;;
+esac
+```
+
+`POST_BACKUP` always runs, even if the backup fails. The script exits
+non-zero when any `rsync` fails or when `mode`, `save`, `monthly`,
+or push-mode `host` are invalid.
+
 ## Exclude Files
 
 Place rsync exclude patterns in:

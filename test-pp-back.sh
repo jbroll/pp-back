@@ -271,5 +271,104 @@ else
     echo "SKIP: pull remote test (ssh localhost not available)" >&2
 fi
 
+#
+# Test: Invalid mode errors
+#
+Test "fix: invalid mode errors"
+
+setup
+mkdir -p test/source
+echo "x" > test/source/f.txt
+
+cat > test.ppb <<EOF
+name=test
+mode=bogus
+host=""
+link=no
+save=14
+monthly=12
+delete=no
+prefix=$(pwd)/test/backup
+data="$(pwd)/test/source"
+EOF
+
+if ./pp-back test >/dev/null 2>&1; then
+    Fail
+else
+    Pass
+fi
+
+#
+# Test: Non-numeric save/monthly rejected
+#
+Test "fix: non-numeric save rejected"
+
+setup
+mkdir -p test/source
+echo "x" > test/source/f.txt
+
+cat > test.ppb <<EOF
+name=test
+mode=pull
+host=""
+link=no
+save=abc
+monthly=12
+delete=no
+prefix=$(pwd)/test/backup
+data="$(pwd)/test/source"
+EOF
+
+if ./pp-back test >/dev/null 2>&1; then
+    Fail
+else
+    Pass
+fi
+
+#
+# Test: rsync failure propagates and POST_BACKUP still runs
+#
+Test "fix: rsync failure propagates with POST hook"
+
+setup
+mkdir -p test/backup
+
+cat > test.ppb <<'OUTER'
+name=test
+mode=pull
+host=""
+link=no
+save=14
+monthly=12
+delete=no
+prefix=PREFIX_PLACEHOLDER
+data="/nonexistent-pp-back-source-xyz"
+
+case $ACTION in
+    POST_BACKUP) echo "post" >> HOOK_PLACEHOLDER ;;
+esac
+OUTER
+
+sed -i "s|PREFIX_PLACEHOLDER|$(pwd)/test/backup|" test.ppb
+sed -i "s|HOOK_PLACEHOLDER|$(pwd)/test/hooks.log|" test.ppb
+
+if ./pp-back test >/dev/null 2>&1; then
+    Fail
+else
+    if grep -q post test/hooks.log 2>/dev/null; then
+        Pass
+    else
+        Fail
+    fi
+fi
+
+#
+# Test: backup date evaluated once per run
+#
+Test "fix: single date evaluation"
+
+n=$(grep -c '(date +%Y' pp-back)
+CompareArgs "$n" "1"
+
 cleanup
 TestDone

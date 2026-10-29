@@ -29,7 +29,11 @@ data="/dir1 /dir2"       # space/newline-separated list of directories to backup
 
 Config files can include pre/post backup hooks by checking `$ACTION`:
 - `ACTION=PRE_BACKUP` - set when sourced before backup starts
-- `ACTION=POST_BACKUP` - set when sourced after backup completes
+- `ACTION=POST_BACKUP` - set when sourced after backup completes (always runs, even on failure; exit status is preserved)
+
+Invalid `mode` (must be `push` or `pull`), non-numeric `save`/`monthly`,
+and empty `host` in push mode all fail with a non-zero exit. Any `rsync`
+failure also fails the run.
 
 ## Exclude Files
 

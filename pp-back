@@ -7,7 +7,7 @@
 #
 # Push/Pull Backup
 #
-# This script depends on /bin/sh, ssh, rsync, awk, mkdir, ls, date, echo, rm, and basename.
+# This script depends on /bin/sh, ssh, rsync, awk, mkdir, ls, date, echo, rm, basename, sed, and mktemp.
 #
 # 
 # The script is invoked as:
@@ -66,9 +66,12 @@ colon=":"
 dryrun=""
 save=14
 monthly=12
+link_depth=20
+
+# sq: single-quote a string for remote shell use
+sq() { printf "'%s'" "$(printf "%s" "$1" | sed "s/'/'\\\\''/g")"; }
 
 set -e
-trap 'rm -f "$tmpfile"' EXIT
 tmpfile=$(mktemp) || exit 1
 
 while getopts "n" opt; do
@@ -89,6 +92,7 @@ if [ ! -f "$1.ppb" ] ; then
     exit 1
 fi
 
+# shellcheck disable=SC3067  # -O supported by bash/dash target shells
 if [ ! -O "$1.ppb" ] ; then
     echo "pp-back: config must be owned by you" >&2
     exit 1
@@ -99,6 +103,24 @@ case $1 in
  *)  config="$(pwd)/$1.ppb" ; config_excl="$(pwd)/$1.ppb.exclude" ;;
 esac
 ACTION=PRE_BACKUP . "$config"
+
+TODAY=$(date +%Y.%m%d)
+
+case $save in ''|*[!0-9]*) echo "pp-back: save must be a number" >&2; exit 1 ;; esac
+case $monthly in ''|*[!0-9]*) echo "pp-back: monthly must be a number" >&2; exit 1 ;; esac
+
+case $mode in
+    push|pull) ;;
+    *) echo "pp-back: unknown mode '$mode'" >&2; exit 1 ;;
+esac
+
+if [ "$mode" = push ] && [ -z "$host" ]; then
+    echo "pp-back: push mode requires host" >&2
+    exit 1
+fi
+
+# Always run POST_BACKUP, preserving exit status
+trap 'rc=$?; ACTION=POST_BACKUP . "$config"; rm -f "$tmpfile"; exit $rc' EXIT INT TERM
 
 if [ "$host"   = ""    ] ; then  colon="";         fi
 if [ "$delete" = "yes" ] ; then  delete=--delete;  else delete=""; fi
@@ -112,13 +134,14 @@ echo "pp-back : $mode : $(date)"
 
 case $mode in
  push)
-    if ! ssh "$host" mkdir -p "$prefix" ; then
+    if ! ssh "$host" "mkdir -p -- $(sq "$prefix")" ; then
         echo "cannot mkdir -p $prefix on remote $host" >&2
         exit 1
     fi
 
     if [ "$link" = yes ] ; then
-        linker=$(ssh "$host" "cd \"$prefix\" && ls -dr $allpattern" 2>/dev/null | head -20 | awk '{ print "--link-dest ../" $1 }')
+        # shellcheck disable=SC2086  # $linker intentionally splits into multiple --link-dest
+        linker=$(ssh "$host" "cd $(sq "$prefix") && ls -dr $allpattern" 2>/dev/null | head -n "$link_depth" | awk '{ print "--link-dest ../" $1 }')
     fi
 
     for source in $data ; do
@@ -126,16 +149,18 @@ case $mode in
 
         cat "$config_excl" >> "$tmpfile" 2>/dev/null || true
         cat "$source/$excl" >> "$tmpfile" 2>/dev/null || true
-        ssh "$host" "cat \"$prefix/$excl\"" >> "$tmpfile" 2>/dev/null || true
-        ssh "$host" "cat \"$prefix/$name.ppb.$(basename "$source").exclude\"" >> "$tmpfile" 2>/dev/null || true
+        ssh "$host" "cat $(sq "$prefix/$excl")" >> "$tmpfile" 2>/dev/null || true
+        ssh "$host" "cat $(sq "$prefix/$name.ppb.$(basename "$source").exclude")" >> "$tmpfile" 2>/dev/null || true
 
-        echo rsync $dryrun -avz $delete $linker "$Excl" "$source" "$host$colon$prefix/$(date +%Y.%m%d)"
-        rsync $dryrun -avz $delete $linker "$Excl" "$source" "$host$colon$prefix/$(date +%Y.%m%d)"
+        # shellcheck disable=SC2086  # $dryrun/$delete/$linker intentionally split
+        echo rsync $dryrun -avz $delete $linker "$Excl" "$source" "$host$colon$prefix/$TODAY"
+        # shellcheck disable=SC2086  # $dryrun/$delete/$linker intentionally split
+        rsync $dryrun -avz $delete $linker "$Excl" "$source" "$host$colon$prefix/$TODAY"
     done
 
     # shellcheck disable=SC2087  # Variables intentionally expanded client-side
     ssh "$host" /bin/sh <<EOF
-        if cd "$prefix" ; then
+        if cd $(sq "$prefix") ; then
             todelete=\$(ls -d $allpattern 2>/dev/null | awk -v daily="$save" -v monthly="$monthly" '
             {
                 ym = substr(\$1, 1, 7)
@@ -169,7 +194,7 @@ EOF
 
     if [ "$link" = yes ] ; then
         # shellcheck disable=SC2086  # $allpattern is a glob
-        linker=$(cd "$prefix" && ls -dr $allpattern 2>/dev/null | head -20 | awk '{ print "--link-dest ../" $1 }')
+        linker=$(cd "$prefix" && ls -dr $allpattern 2>/dev/null | head -n "$link_depth" | awk '{ print "--link-dest ../" $1 }')
     fi
 
     for source in $data ; do
@@ -177,15 +202,17 @@ EOF
 
         cat "$config_excl" >> "$tmpfile" 2>/dev/null || true
         if [ -n "$host" ] ; then
-            ssh "$host" "cat \"$source/$excl\"" >> "$tmpfile" 2>/dev/null || true
+            ssh "$host" "cat $(sq "$source/$excl")" >> "$tmpfile" 2>/dev/null || true
         else
             cat "$source/$excl" >> "$tmpfile" 2>/dev/null || true
         fi
         cat "$prefix/$excl" >> "$tmpfile" 2>/dev/null || true
         cat "$prefix/$name.ppb.$(basename "$source").exclude" >> "$tmpfile" 2>/dev/null || true
 
-        echo rsync $dryrun -avz $delete $linker "$Excl" "$host$colon$source" "$prefix/$(date +%Y.%m%d)"
-        rsync $dryrun -avz $delete $linker "$Excl" "$host$colon$source" "$prefix/$(date +%Y.%m%d)" 2>&1 | grep -E "(speedup is|DRY RUN)" || true
+        # shellcheck disable=SC2086  # $dryrun/$delete/$linker intentionally split
+        echo rsync $dryrun -avz $delete $linker "$Excl" "$host$colon$source" "$prefix/$TODAY"
+        # shellcheck disable=SC2086  # $dryrun/$delete/$linker intentionally split
+        rsync $dryrun -avz $delete $linker "$Excl" "$host$colon$source" "$prefix/$TODAY"
     done
 
     # shellcheck disable=SC2086  # $allpattern is a glob, $todelete is multi-dir
@@ -215,6 +242,5 @@ EOF
  ;;
 esac
 
-ACTION=POST_BACKUP . "$config"
 echo "pp-back : $mode : $(date)"
 
